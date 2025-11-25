@@ -1,0 +1,6 @@
+.nextflow*
+work/
+results/
+.vscode/
+tmp/
+*.csv
