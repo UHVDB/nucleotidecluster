@@ -13,6 +13,8 @@ This wrapper performs the following steps:
 - `--cluster clusty` to cluster with Clusty (for dereplication)
 - `--cluster mcl` to cluster with MCL
 
+*Auto-generated DAG for this workflow:*
+![dag](assets/img/uhvdb-nucleotidecluster-dag.png)
 
 ### Quick start
 In addition to automated downloads and cleanup (limiting disk requirements), this wrapper also makes setup very easy.
