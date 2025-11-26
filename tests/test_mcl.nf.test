@@ -1,0 +1,24 @@
+nextflow_pipeline {
+
+    name "Test pipeline with MCL clustering"
+    script "../main.nf"
+    tag "pipeline"
+    tag "test_mcl"
+    profile "test_mcl"
+
+    test("-profile test_mcl") {
+        when {
+            params {
+                output = "${outputDir}/test_mcl"
+            }
+        }
+
+        then {
+            assertAll(
+                { assert workflow.success },
+                { assert snapshot(path("${params.output}.ani.tsv.zst")).match('ani') },
+                { assert snapshot(path("${params.output}.mcl.zst")).match('mcl') },
+            )
+        }
+    }
+}

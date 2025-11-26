@@ -2,261 +2,224 @@
 
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    UHVDB/proteinsimilarity
+    UHVDB/nucleotidecluster
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    Github : https://github.com/UHVDB/proteinsimilarity
+    Github : https://github.com/UHVDB/nucleotidecluster
 ----------------------------------------------------------------------------------------
-    Overview:
-        1. Download latest ICTV VMR (Nextflow)
-        2. Download ICTV genomes (process - VMR_to_fasta.py)
-        3. Create DIAMOND database of ICTV genomes (process - pyrodigal-gv + DIAMOND)
-        4. Split query viruses into chunks (process - seqkit)
-        5. Align query virus genomes to ICTV database (process - pyrodigal-gv + DIAMOND)
-        6. Perform self alignment of query genomes (process - pyrodigal-gv +  DIAMOND)
-        7. Calculate self score (process - self_score.py)
-        8. Calculate normalized score (process - norm_score.py)
-        9. Combine normalized scores across chunks (process - cat)
-        10. Clean up intermediate files (OPTIONAL)
 */
 
 
-/*
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    DEFINE FUNCTIONS / MODULES / SUBWORKFLOWS / WORKFLOWS
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-*/
-process VMRTOFASTA {
-    label "process_single"
-
-    input:
-    tuple val(meta), path(xlsx)
-
-    output:
-    tuple val(meta), path("${meta.id}.fna.gz")                      , emit: fna
-    tuple val(meta), path("processed_accessions_b.fa_names.tsv")    , emit: processed_tsv
-    tuple val(meta), path("bad_accessions_b.tsv")                   , emit: bad_tsv
-    tuple val(meta), path(".command.log")                           , emit: log
-    tuple val(meta), path(".command.sh")                            , emit: script
-
-    script:
-    """
-    # process VMR accessions
-    VMR_to_fasta.py \\
-        -mode VMR \\
-        -ea B \\
-        -VMR_file_name ${xlsx} \\
-        -v
-
-    # download FNA file using current vmr
-    VMR_to_fasta.py \\
-        -email ${params.email} \\
-        -mode fasta \\
-        -ea b \\
-        -fasta_dir ./ictv_fastas \\
-        -VMR_file_name ${xlsx} \\
-        -v
-
-    cat ictv_fastas/*/*.fa > ${meta.id}.fna
-    gzip ${meta.id}.fna
-    """
-}
-
+// Define processes
 process SEQKIT_SPLIT2 {
     label 'process_high'
-
-    input:
-    tuple val(meta), path(fasta)
-
-    output:
-    tuple val(meta), path("split_fastas/*") , emit: fnas
-    tuple val(meta), path(".command.log")   , emit: log
-    tuple val(meta), path(".command.sh")    , emit: script
-
-    script:
-    """
-    seqkit \\
-        split2 \\
-            ${fasta} \\
-            --threads ${task.cpus} \\
-            --by-size ${params.chunk_size} \\
-            --out-dir split_fastas
-    """
-}
-
-process DIAMOND_MAKEDB {
-    label "process_super_high"
 
     input:
     tuple val(meta), path(fna)
 
     output:
-    tuple val(meta), path("${meta.id}.dmnd")                , emit: dmnd
-    tuple val(meta), path("${meta.id}.pyrodigalgv.faa.gz")  , emit: faa
-    tuple val(meta), path(".command.log")                   , emit: log
-    tuple val(meta), path(".command.sh")                    , emit: script
+    tuple val(meta), path("split_fnas/*")   , emit: fnas
+    tuple val(meta), path(".command.log")   , emit: log
+    tuple val(meta), path(".command.sh")    , emit: script
 
     script:
     """
-    # predict genes from FNA
-    pyrodigal-gv \\
-        -i ${fna} \\
-        -a ${meta.id}.pyrodigalgv.faa \\
-        --jobs ${task.cpus}
-
-    # create DIAMOND database
-    diamond \\
-        makedb \\
+    seqkit split2 \\
+        ${fna} \\
         --threads ${task.cpus} \\
-        --in ${meta.id}.pyrodigalgv.faa \\
-        -d ${meta.id}
-
-    gzip ${meta.id}.pyrodigalgv.faa
+        --by-size ${params.chunk_size} \\
+        --out-dir split_fnas \\
+        --extension ".gz"
     """
 }
 
-
-process DIAMOND_BLASTP {
+process KMERDB_BUILD {
     label 'process_super_high'
 
     input:
-    tuple val(meta) , path(fna)
-    tuple val(meta2), path(dmnd)
+    tuple val(meta), path(fna)
 
     output:
-    tuple val(meta), path("${meta.id}.diamond_blastp.parquet")  , emit: parquet
-    tuple val(meta), path("${meta.id}.pyrodigalgv.faa.gz")      , emit: faa
-    tuple val(meta), path(".command.log")                       , emit: log
-    tuple val(meta), path(".command.sh")                        , emit: script
+    tuple val(meta), path("ref.kdb")        , emit: kmerdb
+    tuple val(meta), path(".command.log")   , emit: log
+    tuple val(meta), path(".command.sh")    , emit: script
 
     script:
     """
-    # predict genes from FNA
-    pyrodigal-gv \\
-        -i ${fna} \\
-        -a ${meta.id}.pyrodigalgv.faa \\
-        --jobs ${task.cpus}
+    echo "${fna}" > ref_kdb.txt
 
-    # align genes to DIAMOND reference db
-    diamond \\
-        blastp \\
-        ${params.diamond_args} \\
-        --query ${meta.id}.pyrodigalgv.faa \\
-        --db ${dmnd} \\
-        --threads ${task.cpus} \\
-        --outfmt 6 \\
-        --out ${meta.id}.diamond_blastp.tsv
-
-    duckdb -c "
-        SET memory_limit='${task.memory}'; \\
-        SET threads=${task.cpus}; \\
-        COPY(select * from read_csv_auto('${meta.id}.diamond_blastp.tsv', delim='\t', header=false, parallel=true)) TO '${meta.id}.diamond_blastp.parquet' WITH (FORMAT 'PARQUET')
-    "
-
-    gzip ${meta.id}.pyrodigalgv.faa
-    # rm -rf ${meta.id}.diamond_blastp.tsv
+    # build kmer-db database for reference
+    kmer-db \\
+        build \\
+        -k 25 \\
+        -f 0.2 \\
+        -t ${task.cpus} \\
+        -multisample-fasta \\
+        ref_kdb.txt \\
+        ref.kdb
     """
 }
 
-process DIAMOND_SELF {
+process ALIGN {
     label 'process_super_high'
 
     input:
-    tuple val(meta), path(faa)
+    tuple val(meta) , path(chunk_fna)
+    tuple val(meta2), path(kmerdb), path(full_fna)
 
     output:
-    tuple val(meta), path("${meta.id}.diamond_blastp.parquet")  , emit: parquet
-    tuple val(meta), path(".command.log")                       , emit: log
-    tuple val(meta), path(".command.sh")                        , emit: script
+    tuple val(meta), path("${meta.id}.vclust_ani.parquet.zst")      , emit: parquet
+    tuple val(meta), path("${meta.id}.vclust_ani.ids.parquet.zst")  , emit: ids
+    tuple val(meta), path(".command.log")                           , emit: log
+    tuple val(meta), path(".command.sh")                            , emit: script
 
     script:
     """
-    # make DIAMOND db for self alignment
-    diamond \\
-        makedb \\
-        --threads ${task.cpus} \\
-        --in ${faa} \\
-        -d ${meta.id}
+    echo "${chunk_fna}" > query_kdb.txt
 
-    # align genes to DIAMOND self db
-    diamond \\
-        blastp \\
-        --masking none \\
-        -k 1000 \\
-        -e 1e-3 \\
-        --faster \\
-        --query ${faa} \\
-        --db ${meta.id}.dmnd \\
-        --threads ${task.cpus} \\
-        --outfmt 6 \\
-        --out ${meta.id}.diamond_blastp.tsv
+    # build kmer-db database for query
+    kmer-db \\
+        new2all \\
+        -sparse \\
+        -min num-kmers:20 \\
+        -min ani-shorter:${params.min_ani} \\
+        -t ${task.cpus} \\
+        -multisample-fasta \\
+        ${kmerdb} \\
+        query_kdb.txt \\
+        ${meta.id}.new2all.csv
 
-    duckdb -c "
-        SET memory_limit='${task.memory}'; \\
-        SET threads=${task.cpus}; \\
-        COPY(select * from read_csv_auto('${meta.id}.diamond_blastp.tsv', delim='\t', header=false, parallel=true)) TO '${meta.id}.diamond_blastp.parquet' WITH (FORMAT 'PARQUET')
-    "
+    # convert kmer-db output to distances
+    kmer-db \\
+        distance \\
+        ani-shorter \\
+        -sparse \\
+        -min ${params.min_ani} \\
+        -t ${task.cpus} \\
+        ${meta.id}.new2all.csv \\
+        ${meta.id}.dist.csv
 
-    # rm -rf ${meta.id}.diamond_blastp.tsv
+    # convert distances to lz-ani format
+    convert_to_lzani.py \\
+        -i ${meta.id}.dist.csv \\
+        -o ${meta.id}.lzani_prefilter.txt
+
+    # align sequences with LZ-ANI
+    lz-ani \\
+        all2all \\
+        --in-fasta ${full_fna} \\
+        -o ${meta.id}.vclust_ani.tsv \\
+        --out-format query,reference,tani,gani,ani,qcov,rcov \\
+        -t ${task.cpus} \\
+        --multisample-fasta true \\
+        --out-type tsv \\
+        --out-filter ani ${params.min_ani} \\
+        --flt-kmerdb ${meta.id}.lzani_prefilter.txt ${params.min_qcov}
+
+    tsv_to_parquet.py --input ${meta.id}.vclust_ani.tsv --output ${meta.id}.vclust_ani.parquet.zst
+    tsv_to_parquet.py --input ${meta.id}.vclust_ani.ids.tsv --output ${meta.id}.vclust_ani.ids.parquet.zst
+    rm ${meta.id}.new2all.csv ${meta.id}.dist.csv ${meta.id}.lzani_prefilter.txt
     """
 }
 
-process SELFSCORE {
-    label 'process_single'
+process COMBINEANIS {
+    label 'process_medium'
+    publishDir path: file("${params.output}").getParent(), mode:'copy'
 
     input:
-    tuple val(meta), path(parquet)
+    tuple val(meta), path(parquets)
 
     output:
-    tuple val(meta), path("${meta.id}.selfscore.parquet")   , emit: parquet
+    tuple val(meta), path("${output}.ani.tsv.zst")  , emit: tsv
+    tuple val(meta), path(".command.log")           , emit: log
+    tuple val(meta), path(".command.sh")            , emit: script
 
     script:
+    output = file("${params.output}").getName()
     """
-    self_score.py \\
+    combine_anis.py \\
+        -i "./*.parquet.zst" \\
+        -o ${output}.ani.tsv
+
+    zstd ${output}.ani.tsv
+    """
+}
+
+process MCL {
+    label 'process_super_high'
+    publishDir path: file("${params.output}").getParent(), mode:'copy'
+
+    input:
+    tuple val(meta), path(tsv)
+
+    output:
+    tuple val(meta), path("${output}.mcl.zst")  , emit: mcl
+    tuple val(meta), path(".command.log")       , emit: log
+    tuple val(meta), path(".command.sh")        , emit: script
+
+    script:
+    output = file("${params.output}").getName()
+    """
+    # cut columns for MCL
+    csvtk cut \\
+        ${tsv} \\
+        --tabs \\
+        --fields query,reference,gani \\
+        --delete-header \\
+        --num-cpus ${task.cpus} \\
+        --out-tabs \\
+        --out-file ${output}.mcl_input.tsv
+
+    # run mcl
+    mcl \\
+        ${output}.mcl_input.tsv \\
+        --abc \\
+        -sort revsize \\
+        -te ${task.cpus} \\
+        -o ${output}.mcl
+
+    zstd ${output}.mcl
+    """
+}
+
+process CLUSTY {
+    label 'process_super_high'
+    publishDir path: file("${params.output}").getParent(), mode:'copy'
+
+    input:
+    tuple val(meta) , path(tsv)
+    tuple val(meta2), path(parquet)
+
+    output:
+    tuple val(meta), path("${output}.clusty.tsv.zst")   , emit: tsv
+    tuple val(meta), path(".command.log")               , emit: log
+    tuple val(meta), path(".command.sh")                , emit: script
+
+    script:
+    output = file("${params.output}").getName()
+    """
+    # convert IDs parquet to TSV
+    parquet_to_tsv.py \\
         --input ${parquet} \\
-        --output ${meta.id}.selfscore.parquet
-    """
-}
+        --output ${output}.ids.tsv \\
+        --header True
 
-process NORMSCORE {
-    label 'process_high'
+    unzstd ${tsv} -f -o ${meta.id}.clusty_input.tsv
 
-    input:
-    tuple val(meta), path(self_parquet), path(ref_parquet)
+    # run clusty
+    clusty \\
+        --objects-file ${output}.ids.tsv \\
+        --algo cd-hit \\
+        --id-cols query reference \\
+        --distance-col ani \\
+        --similarity \\
+        --min ani ${params.min_ani} \\
+        --min qcov ${params.min_qcov} \\
+        --out-representatives \\
+        ${meta.id}.clusty_input.tsv \\
+        ${output}.clusty.tsv
 
-    output:
-    tuple val(meta), path("${meta.id}.normscore.tsv.gz")    , emit: tsv
-
-    script:
-    """
-    norm_score.py \\
-        --input ${ref_parquet} \\
-        --self_score ${self_parquet} \\
-        --min_score ${params.min_score} \\
-        --output ${meta.id}.normscore.tsv
-
-    gzip ${meta.id}.normscore.tsv
-    """
-}
-
-process COMBINESCORES {
-    label 'process_single'
-    tag "all"
-    storeDir "."
-
-    input:
-    path(tsvs)
-
-    output:
-    path("${params.output}")    , emit: tsv
-
-    script:
-    """
-    touch ${params.output}
-
-    # iterate over scores
-    for table in ${tsvs}; do
-       zcat \${table} >> ${params.output}
-    done
+    zstd ${output}.clusty.tsv
+    rm -rf ${output}.ids.tsv ${meta.id}.clusty_input.tsv
     """
 }
 
@@ -266,33 +229,15 @@ workflow {
     main:
     // Check if output file already exists
     def output_file = file("${params.output}")
-    def vmr_dmnd = params.vmr_dmnd ? file(params.vmr_dmnd).exists() : false
+    def input_fna = channel.fromPath(params.input_fna).map { fna ->
+            [ [ id: "${fna.getBaseName()}" ], fna ]
+        }
 
     if (!output_file.exists()) {
 
-        // Prepare ICTV DIAMOND database
-        if (!vmr_dmnd) {
-            ch_ictv_vmr = channel.fromPath(params.vmr_url).map { xlsx ->
-                [ [ id: "${xlsx.getBaseName()}" ], xlsx ]
-            }
-
-            VMRTOFASTA(
-                ch_ictv_vmr
-            )
-
-            DIAMOND_MAKEDB(
-                VMRTOFASTA.out.fna
-            )
-            ch_dmnd_db = DIAMOND_MAKEDB.out.dmnd
-        } else {
-            ch_dmnd_db = channel.fromPath(params.vmr_dmnd).map { dmnd ->
-                [ [ id: "${dmnd.getBaseName()}" ], dmnd ]
-            }
-        }
-
-        // Split input FNA file
+        // Split input FNA into chunks
         SEQKIT_SPLIT2(
-            channel.fromPath(params.query_fna).map { fna ->
+            channel.fromPath(params.input_fna).map { fna ->
                 [ [ id: "${fna.getBaseName()}" ], fna ]
             }
         )
@@ -304,35 +249,34 @@ workflow {
                 [ [ id: fna.getBaseName() ], fna ]
             }
 
+        // Create kmer-db database from input FNA
+        KMERDB_BUILD(input_fna)
 
-        // Run DIAMOND against ref db
-        DIAMOND_BLASTP(
+        // Align split FNAs against kmer-db database
+        ALIGN(
             ch_split_fnas,
-            ch_dmnd_db.collect()
+            KMERDB_BUILD.out.kmerdb.join(input_fna).collect()
         )
 
-        // Run DIAMOND self alignment
-        DIAMOND_SELF(
-            DIAMOND_BLASTP.out.faa
+        // Combine ANI scores
+        COMBINEANIS(
+            ALIGN.out.parquet.map { _meta, parquet -> [ [ id:'combined'], parquet ] }.groupTuple(sort:'deep')
         )
 
-        // Calculate self score
-        SELFSCORE(
-            DIAMOND_SELF.out.parquet
-        )
-
-        // Calculate normalized bitscore
-        NORMSCORE(
-            SELFSCORE.out.parquet.combine(DIAMOND_BLASTP.out.parquet, by:0)
-        )
-
-        // Combine results (process - CAT)
-        COMBINESCORES(
-            NORMSCORE.out.tsv.map { _meta, tsvs -> [ tsvs ] }.collect()
-        )
+        if ( (params.cluster == 'mcl') || (params.cluster == 'MCL') ) {
+            // Cluster combined ANI scores with MCL
+            MCL(
+                COMBINEANIS.out.tsv
+            )
+        } else if ( (params.cluster == 'clusty') || (params.cluster == 'Clusty') ) {
+            CLUSTY(
+                COMBINEANIS.out.tsv,
+                ALIGN.out.ids.first()
+            )
+        }
 
     } else {
-        println "[UHVDB/proteinsimilarity]: Output file [${params.output}] already exists!"
+        println "[UHVDB/nucleotidecluster]: Output file [${params.output}] already exists!"
     }
 
     // Delete intermediate and Nextflow-specific files
