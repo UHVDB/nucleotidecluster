@@ -1,21 +1,18 @@
-# UHVDB/proteinsimilarity
-A Nextflow wrapper for calculating the protein similarity between a query set of viruses and ICTV genomes.
+# UHVDB/nucleotidecluster
+A Nextflow wrapper for clustering viral genomes using nucleotide similarity.
 
 ### Overview
 This wrapper performs the following steps:
 
-*If `--vmr_dmnd` is specified and the DIAMOND database exists, skips to step 4*
+1. Split `--input_fna` into chunks of size `--chunk_size`
+2. Create a kmer-db database for `--input_fna`
+3. Align each chunk against the kmer-db database
+4. Combine alignment outputs across chunks
+5. Cluster using alignment outputs (OPTIONAL)
+- `--cluster false` to bypass clustering
+- `--cluster clusty` to cluster with Clusty (for dereplication)
+- `--cluster mcl` to cluster with MCL
 
-1. Download latest ICTV VMR specified with `--vmr_url` (`--email <your-email@email.com` needs to be specified for Entrez)
-2. Download ICTV genomes
-3. Call genes with pyrodigal-gv and create DIAMOND database of ICTV genomes
-4. Split query viruses into chunks of size `--chunk_size`
-5. Call genes for query chunks and align to ICTV database
-6. Perform self alignment of query genomes
-7. Calculate self score
-8. Calculate normalized score
-9. Combine normalized scores across chunks
-10. Clean up intermediate files (OPTIONAL: `--remove_tmp true`)
 
 ### Quick start
 In addition to automated downloads and cleanup (limiting disk requirements), this wrapper also makes setup very easy.
@@ -38,35 +35,54 @@ micromamba activate nextflow
 
 Then just run the pipeline!
 ```
-nextflow run UHVDB/proteinsimilarity -profile test,<docker/singularity/conda/mamba>
+nextflow run UHVDB/nucleotidecluster -profile test,<docker/singularity/conda/mamba>
 ```
 
 ### Usage
-The only arguments for this tool are:
+The arguments for this tool are:
 
-`--query_fna`: Path (or URL) to a FNA file of query virus genomes.
+`--input_fna`: Path (or URL) to input virus FNA file (default: null)
 
-`--vmr_dmnd`: Path (or URL) to a DMND database created from ICTV genomes (or any set of genomes).
+`--chunk_size`: Number of sequences per chunk after splitting (default: 10,000)
 
-`--vmr_url`: Path (or URL) to an ICTV VMR Excel file.
+`--min_ani`: Minimum ANI for filtering alignments and clustering (default: 0.95)
 
-`--email`: Email address to use for Entrez downloads.
+`--min_qcov`: Minimum query coverage for filtering alignments and clustering (default: 0.85)
 
-`--chunk_size`: Number (Integer) of host sequences contained in each chunk (default: 10,000)
+`--cluster`: Clustering methodology (default: false; other options = 'clusty' or 'mcl')
 
-`--diamond_args`: CLI arguments to use when running DIAMOND query-v-ictv (default: `--masking none -k 1000 -e 1e-3 --very-sensitive`)
+`--output`: Prefix for output ANI and cluster TSV files (default: null)
 
-`--min_score`: Minimum protein similarity values to output (default: 5.5, decreasing this to 0 will dramatically increase the output file size)
+`--remove_tmp`: Remove all intermediate files (default: false)
 
-`--output`: Path to output TSV file containing protein similarity values for all queries vs ICTV viruses.
 
 ### Output
-The only output of this wrapper is a protein similarity TSV file with 3 columns (`query`,`reference`,`protein_similarity`)
+The outputs of this wrapper are:
+
+1) an ANI TSV file with _ columns (`query`, `reference`, `tani`, `gani`, `ani`, `qcov`, `rcov`)
 ```tsv
-NC_024375.1	Cinqassovirus_ah1--MG250483.1	0.49
-NC_024375.1	Krischvirus_jse--EU863408.1	0.73
-NC_024375.1	Krischvirus_georgiaone--EF437941.1	0.25
+query	reference	tani	gani	ani	qcov	rcov
+NC_005091	NC_005091.alt2	0.966298	0.964424	0.964911	0.999495	0.999859
+NC_005091.alt2	NC_005091	0.966298	0.967989	0.968125	0.999859	0.999495
+NC_005091.alt1	NC_005091	0.970072	0.970151	0.971368	0.998747	0.998712
+```
+2) and a clustering file if `--cluster` is not false
+
+if `--cluster clusty` is input, a TSV file assigning each sequence to a cluster representative:
+```tsv
+object	cluster
+NC_010807.alt2	NC_010807.alt2
+NC_010807.alt3	NC_010807.alt2
+NC_010807	NC_010807.alt2
+```
+
+if `--cluster mcl` is input, a tab separated file where each line contains the members of a cluster:
+```tsv
+NC_010807.alt3	NC_010807.alt2	NC_010807	NC_010807.alt1
+NC_005091	NC_005091.alt2	NC_005091.alt1
+NC_025457.alt1	NC_025457
+NC_002486.alt	NC_002486
 ```
 
 ### Credits
-This wrapper was made by @CarsonJM. However, primary credit of course goes to the UHGV-classifier developers (https://github.com/snayfach/UHGV-classifier), and their work should be cited if this wrapper is used (https://doi.org/10.1101/2025.11.01.686033).
+This wrapper was made by @CarsonJM. However, primary credit of course goes to the vClust developers (who developed kmer-db, lz-ani, and vClust)(https://github.com/refresh-bio/vclust), and their work should be cited if this wrapper is used (https://doi.org/10.1038/s41592-025-02701-7).

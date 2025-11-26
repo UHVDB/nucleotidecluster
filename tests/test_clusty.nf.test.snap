@@ -1,0 +1,22 @@
+{
+    "clusty": {
+        "content": [
+            "test_clusty.clusty.tsv.zst:md5,ad48a4cd7e7b4fbb42a2c219889845b1"
+        ],
+        "meta": {
+            "nf-test": "0.9.3",
+            "nextflow": "25.10.0"
+        },
+        "timestamp": "2025-11-25T16:35:47.785570744"
+    },
+    "ani": {
+        "content": [
+            "test_clusty.ani.tsv.zst:md5,aa4a434f9c2932c7da0be6e0efc2a931"
+        ],
+        "meta": {
+            "nf-test": "0.9.3",
+            "nextflow": "25.10.0"
+        },
+        "timestamp": "2025-11-25T16:35:47.769775854"
+    }
+}

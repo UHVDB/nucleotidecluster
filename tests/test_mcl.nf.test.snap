@@ -1,0 +1,22 @@
+{
+    "mcl": {
+        "content": [
+            "test_mcl.mcl.zst:md5,2786f6c4c5b88d06d0b3d5d6784614f9"
+        ],
+        "meta": {
+            "nf-test": "0.9.3",
+            "nextflow": "25.10.0"
+        },
+        "timestamp": "2025-11-25T16:39:49.241730438"
+    },
+    "ani": {
+        "content": [
+            "test_mcl.ani.tsv.zst:md5,aa4a434f9c2932c7da0be6e0efc2a931"
+        ],
+        "meta": {
+            "nf-test": "0.9.3",
+            "nextflow": "25.10.0"
+        },
+        "timestamp": "2025-11-25T16:39:49.203311019"
+    }
+}

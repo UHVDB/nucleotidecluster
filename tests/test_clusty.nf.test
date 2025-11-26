@@ -1,0 +1,24 @@
+nextflow_pipeline {
+
+    name "Test pipeline with Clusty clustering"
+    script "../main.nf"
+    tag "pipeline"
+    tag "test_clusty"
+    profile "test_clusty"
+
+    test("-profile test_clusty") {
+        when {
+            params {
+                output = "${outputDir}/test_clusty"
+            }
+        }
+
+        then {
+            assertAll(
+                { assert workflow.success },
+                { assert snapshot(path("${params.output}.ani.tsv.zst")).match('ani') },
+                { assert snapshot(path("${params.output}.clusty.tsv.zst")).match('clusty') },
+            )
+        }
+    }
+}
